@@ -16,12 +16,9 @@ def hash_password(password):
 conn = sqlite3.connect(DB_NAME, check_same_thread=False)
 cursor = conn.cursor()
 
-# 🔥 FORCE CLEAN TABLE STRUCTURE (Important Fix)
-cursor.execute("DROP TABLE IF EXISTS users")
-cursor.execute("DROP TABLE IF EXISTS bookings")
-
+# ---------------- CREATE TABLES (SAFE) ----------------
 cursor.execute("""
-CREATE TABLE users(
+CREATE TABLE IF NOT EXISTS users(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE,
     password TEXT,
@@ -31,7 +28,7 @@ CREATE TABLE users(
 """)
 
 cursor.execute("""
-CREATE TABLE bookings(
+CREATE TABLE IF NOT EXISTS bookings(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT,
     slot TEXT UNIQUE,
@@ -43,13 +40,16 @@ CREATE TABLE bookings(
 
 conn.commit()
 
-# ---------------- CREATE ADMIN ----------------
+# ---------------- CREATE ADMIN ONLY IF NOT EXISTS ----------------
 admin_pass = hash_password("admin123")
-cursor.execute(
-    "INSERT INTO users (username, password, role, booking_count) VALUES (?, ?, ?, ?)",
-    ("admin", admin_pass, "admin", 0)
-)
-conn.commit()
+
+cursor.execute("SELECT * FROM users WHERE username=?", ("admin",))
+if not cursor.fetchone():
+    cursor.execute(
+        "INSERT INTO users (username, password, role, booking_count) VALUES (?, ?, ?, ?)",
+        ("admin", admin_pass, "admin", 0)
+    )
+    conn.commit()
 
 # ---------------- SESSION ----------------
 if "user" not in st.session_state:
@@ -65,6 +65,7 @@ if not st.session_state.user:
 
     choice = st.radio("Select Option", ["Login", "Register"])
 
+    # -------- REGISTER --------
     if choice == "Register":
         st.subheader("Create Account")
 
@@ -72,7 +73,7 @@ if not st.session_state.user:
         password = st.text_input("Password", type="password")
 
         if st.button("Register"):
-            if username == "" or password == "":
+            if username.strip() == "" or password.strip() == "":
                 st.error("All fields required")
             else:
                 cursor.execute("SELECT * FROM users WHERE username=?", (username,))
@@ -84,8 +85,9 @@ if not st.session_state.user:
                         (username, hash_password(password), "user", 0)
                     )
                     conn.commit()
-                    st.success("Account Created")
+                    st.success("Account Created Successfully ✅")
 
+    # -------- LOGIN --------
     if choice == "Login":
         st.subheader("Login")
 
@@ -104,7 +106,7 @@ if not st.session_state.user:
                 st.session_state.role = user[3]
                 st.rerun()
             else:
-                st.error("Invalid Credentials")
+                st.error("Invalid Credentials ❌")
 
 # ======================================================
 # ================= USER DASHBOARD =====================
@@ -133,7 +135,6 @@ if st.session_state.role == "user":
     selected_slot = st.selectbox("Choose Slot", slots)
 
     if st.button("Book Slot"):
-
         cursor.execute("SELECT * FROM bookings WHERE slot=?", (selected_slot,))
         if cursor.fetchone():
             st.error("Slot already booked")
