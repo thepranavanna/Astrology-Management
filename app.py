@@ -1,9 +1,7 @@
 import streamlit as st
 import sqlite3
 import hashlib
-import qrcode
 from datetime import datetime
-from io import BytesIO
 
 # ---------------- HASH FUNCTION ----------------
 def hash_password(password):
@@ -36,7 +34,7 @@ CREATE TABLE IF NOT EXISTS bookings(
 
 conn.commit()
 
-# ---------------- CREATE DEFAULT ADMIN ----------------
+# ---------------- CREATE ADMIN ----------------
 admin_password = hash_password("admin123")
 
 cursor.execute("SELECT * FROM users WHERE username=?", ("admin",))
@@ -54,11 +52,8 @@ if "user" not in st.session_state:
 if "role" not in st.session_state:
     st.session_state.role = None
 
-# ---------------- PAGE CONFIG ----------------
-st.set_page_config(page_title="Divine Astrology Portal")
-st.title("🔮 Divine Astrology Consultation Portal")
-
-UPI_ID = "rajkumarpalanivel80@okaxis"
+st.set_page_config(page_title="Astrology Portal")
+st.title("🔮 Simple Astrology Booking Portal")
 
 # ---------------- LOGOUT ----------------
 if st.session_state.user:
@@ -67,43 +62,45 @@ if st.session_state.user:
         st.session_state.role = None
         st.rerun()
 
-# ---------------- AUTH SYSTEM ----------------
+# ================= AUTH =================
 if not st.session_state.user:
 
-    menu = st.sidebar.selectbox("Menu", ["Login", "Register"])
+    choice = st.radio("Select Option", ["Login", "Register"])
 
     # -------- REGISTER --------
-    if menu == "Register":
-        st.subheader("Create Account")
+    if choice == "Register":
+        st.subheader("Create New Account")
 
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
+        new_user = st.text_input("Username")
+        new_pass = st.text_input("Password", type="password")
 
         if st.button("Register"):
-            if username == "" or password == "":
-                st.error("Please fill all fields")
+
+            if new_user.strip() == "" or new_pass.strip() == "":
+                st.error("All fields required")
             else:
-                try:
+                cursor.execute("SELECT * FROM users WHERE username=?", (new_user,))
+                if cursor.fetchone():
+                    st.error("Username already exists")
+                else:
                     cursor.execute(
                         "INSERT INTO users (username, password, role, booking_count) VALUES (?, ?, ?, ?)",
-                        (username, hash_password(password), "user", 0)
+                        (new_user, hash_password(new_pass), "user", 0)
                     )
                     conn.commit()
-                    st.success("Account Created Successfully")
-                except:
-                    st.error("Username already exists")
+                    st.success("Account Created Successfully ✅")
 
     # -------- LOGIN --------
-    if menu == "Login":
+    if choice == "Login":
         st.subheader("Login")
 
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
+        login_user = st.text_input("Username")
+        login_pass = st.text_input("Password", type="password")
 
         if st.button("Login"):
             cursor.execute(
                 "SELECT * FROM users WHERE username=? AND password=?",
-                (username, hash_password(password))
+                (login_user, hash_password(login_pass))
             )
             user = cursor.fetchone()
 
@@ -114,144 +111,78 @@ if not st.session_state.user:
             else:
                 st.error("Invalid Username or Password")
 
-# ---------------- USER DASHBOARD ----------------
+# ================= USER DASHBOARD =================
 if st.session_state.role == "user":
 
-    st.sidebar.success("Logged in as: " + st.session_state.user)
-
-    option = st.sidebar.selectbox("User Panel", ["Book Slot", "My Bookings"])
+    st.success("Welcome " + st.session_state.user)
 
     slots = ["10:00 AM", "12:00 PM", "02:00 PM", "04:00 PM"]
 
-    # -------- BOOK SLOT --------
-    if option == "Book Slot":
+    st.subheader("Book Appointment")
 
-        cursor.execute(
-            "SELECT booking_count FROM users WHERE username=?",
-            (st.session_state.user,)
-        )
-        booking_count = cursor.fetchone()[0]
+    cursor.execute(
+        "SELECT booking_count FROM users WHERE username=?",
+        (st.session_state.user,)
+    )
+    count = cursor.fetchone()[0]
 
-        amount = 501 if booking_count == 0 else 301
+    amount = 501 if count == 0 else 301
+    st.write("Consultation Fee: ₹", amount)
 
-        st.subheader("Available Slots")
-        st.write("Consultation Fee: ₹", amount)
+    selected_slot = st.selectbox("Choose Slot", slots)
 
-        for slot in slots:
-            cursor.execute("SELECT * FROM bookings WHERE slot=?", (slot,))
-            booked = cursor.fetchone()
+    if st.button("Book Now"):
 
-            if booked:
-                st.write(f"{slot} ❌ Booked")
-            else:
-                if st.button(f"Book {slot}"):
-
-                    upi_link = f"upi://pay?pa={UPI_ID}&pn=Astrology&am={amount}&cu=INR"
-
-                    qr = qrcode.make(upi_link)
-                    buffer = BytesIO()
-                    qr.save(buffer)
-                    buffer.seek(0)
-
-                    st.image(buffer, caption="Scan & Pay")
-                    st.info("After payment click confirm")
-
-                    if st.button("Confirm Payment"):
-
-                        try:
-                            cursor.execute(
-                                "INSERT INTO bookings (username, slot, amount, status, created_at) VALUES (?, ?, ?, ?, ?)",
-                                (st.session_state.user, slot, amount, "Pending", str(datetime.now()))
-                            )
-
-                            cursor.execute(
-                                "UPDATE users SET booking_count = booking_count + 1 WHERE username=?",
-                                (st.session_state.user,)
-                            )
-
-                            conn.commit()
-                            st.success("Booking Request Sent Successfully")
-                            st.rerun()
-
-                        except:
-                            st.error("Slot already booked!")
-
-    # -------- MY BOOKINGS --------
-    if option == "My Bookings":
-
-        st.subheader("My Bookings")
-
-        cursor.execute(
-            "SELECT slot, amount, status FROM bookings WHERE username=?",
-            (st.session_state.user,)
-        )
-        data = cursor.fetchall()
-
-        if data:
-            for row in data:
-                st.write("Slot:", row[0])
-                st.write("Amount: ₹", row[1])
-                st.write("Status:", row[2])
-                st.write("------------------")
+        cursor.execute("SELECT * FROM bookings WHERE slot=?", (selected_slot,))
+        if cursor.fetchone():
+            st.error("Slot already booked ❌")
         else:
-            st.info("No bookings yet.")
+            cursor.execute(
+                "INSERT INTO bookings (username, slot, amount, status, created_at) VALUES (?, ?, ?, ?, ?)",
+                (st.session_state.user, selected_slot, amount, "Pending", str(datetime.now()))
+            )
 
-# ---------------- ADMIN DASHBOARD ----------------
+            cursor.execute(
+                "UPDATE users SET booking_count = booking_count + 1 WHERE username=?",
+                (st.session_state.user,)
+            )
+
+            conn.commit()
+            st.success("Booking Sent For Approval ✅")
+
+    st.subheader("My Bookings")
+
+    cursor.execute(
+        "SELECT slot, amount, status FROM bookings WHERE username=?",
+        (st.session_state.user,)
+    )
+    data = cursor.fetchall()
+
+    for row in data:
+        st.write(f"{row[0]} | ₹{row[1]} | {row[2]}")
+
+# ================= ADMIN DASHBOARD =================
 if st.session_state.role == "admin":
 
-    st.sidebar.success("Admin Panel")
+    st.success("Admin Panel")
 
-    option = st.sidebar.selectbox(
-        "Admin Controls",
-        ["Approve Bookings", "View Payments", "Approved Meetings"]
-    )
+    st.subheader("Pending Bookings")
 
-    # -------- APPROVE BOOKINGS --------
-    if option == "Approve Bookings":
+    cursor.execute("SELECT id, username, slot, amount FROM bookings WHERE status='Pending'")
+    pending = cursor.fetchall()
 
-        st.subheader("Pending Bookings")
+    for row in pending:
+        st.write(f"{row[1]} | {row[2]} | ₹{row[3]}")
+        if st.button("Approve " + str(row[0])):
+            cursor.execute(
+                "UPDATE bookings SET status='Approved' WHERE id=?",
+                (row[0],)
+            )
+            conn.commit()
+            st.rerun()
 
-        cursor.execute("SELECT id, username, slot, amount FROM bookings WHERE status='Pending'")
-        pending = cursor.fetchall()
+    st.subheader("Total Revenue")
 
-        if pending:
-            for row in pending:
-                st.write(f"User: {row[1]} | Slot: {row[2]} | ₹{row[3]}")
-                if st.button(f"Approve {row[0]}"):
-                    cursor.execute(
-                        "UPDATE bookings SET status='Approved' WHERE id=?",
-                        (row[0],)
-                    )
-                    conn.commit()
-                    st.success("Approved Successfully")
-                    st.rerun()
-        else:
-            st.info("No Pending Bookings")
-
-    # -------- VIEW PAYMENTS --------
-    if option == "View Payments":
-
-        st.subheader("All Payments")
-
-        cursor.execute("SELECT username, slot, amount FROM bookings")
-        all_bookings = cursor.fetchall()
-
-        total = sum([row[2] for row in all_bookings])
-        st.write("Total Revenue: ₹", total)
-
-        for row in all_bookings:
-            st.write(f"{row[0]} - {row[1]} - ₹{row[2]}")
-
-    # -------- APPROVED MEETINGS --------
-    if option == "Approved Meetings":
-
-        st.subheader("Approved Meetings")
-
-        cursor.execute("SELECT username, slot, amount FROM bookings WHERE status='Approved'")
-        approved = cursor.fetchall()
-
-        if approved:
-            for row in approved:
-                st.write(f"{row[0]} - {row[1]} - ₹{row[2]}")
-        else:
-            st.info("No Approved Meetings")
+    cursor.execute("SELECT amount FROM bookings")
+    total = sum([row[0] for row in cursor.fetchall()])
+    st.write("₹", total)
