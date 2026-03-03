@@ -4,10 +4,8 @@ import hashlib
 import qrcode
 from io import BytesIO
 
-DB_NAME = "astrology.db"
-
 # ---------------- DATABASE ----------------
-conn = sqlite3.connect(DB_NAME, check_same_thread=False)
+conn = sqlite3.connect("astrology.db", check_same_thread=False)
 cursor = conn.cursor()
 
 cursor.execute("""
@@ -56,13 +54,13 @@ if "booking_data" not in st.session_state:
 
 st.title("🔮 Astrology Kundli Booking System")
 
-menu = ["Login", "Create Account"]
-
+# ---------------- MENU ----------------
 if st.session_state.user == "admin":
     menu = ["Admin Panel", "Logout"]
-
 elif st.session_state.user:
     menu = ["Book Slot", "My Bookings", "Logout"]
+else:
+    menu = ["Login", "Create Account"]
 
 choice = st.sidebar.selectbox("Menu", menu)
 
@@ -77,13 +75,14 @@ if choice == "Create Account":
             cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)",
                            (username, hash_password(password)))
             conn.commit()
-            st.success("Account created successfully! Please login.")
+            st.success("Account created successfully!")
         except:
             st.error("Username already exists!")
 
 # ---------------- LOGIN ----------------
 elif choice == "Login":
     st.subheader("Login")
+
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
@@ -103,14 +102,13 @@ elif choice == "Login":
 
 # ---------------- BOOK SLOT ----------------
 elif choice == "Book Slot":
-    st.subheader("Book Your Kundli Session")
+    st.subheader("Book Kundli Appointment")
 
     slot = st.selectbox("Select Slot", ["10 AM", "1 PM", "4 PM", "7 PM"])
     amount = 500
     st.write("Amount to Pay: ₹500")
 
-    # Birth details
-    st.subheader("Birth Details (Required for Kundli)")
+    st.subheader("Birth Details")
     dob = st.date_input("Date of Birth")
     birth_time = st.time_input("Accurate Time of Birth")
     birth_place = st.text_input("Place of Birth")
@@ -121,7 +119,6 @@ elif choice == "Book Slot":
         else:
             upi_id = "rajkumarpalanivel80@okaxis"
             payment_link = f"upi://pay?pa={upi_id}&pn=Astrology&am={amount}&cu=INR"
-
             qr_image = generate_qr(payment_link)
             st.image(qr_image)
 
@@ -137,21 +134,18 @@ elif choice == "Book Slot":
     if st.session_state.booking_data:
         st.subheader("After Payment Details")
 
-        contact = st.text_input("Enter Your Contact Number")
-        transaction_id = st.text_input("Enter UPI Transaction ID")
-        message = st.text_area("Message for Astrologer (Optional)")
+        contact = st.text_input("Contact Number")
+        transaction_id = st.text_input("Transaction ID")
+        message = st.text_area("Message (Optional)")
 
         if st.button("Submit Booking"):
-            if contact.strip() == "":
-                st.error("Contact number is required!")
-            elif transaction_id.strip() == "":
-                st.error("Transaction ID is required!")
+            if contact == "" or transaction_id == "":
+                st.error("Contact and Transaction ID are required!")
             else:
                 cursor.execute("""
-                INSERT INTO bookings (
-                    username, slot, amount, dob, birth_time, birth_place,
-                    contact, transaction_id, message, status
-                )
+                INSERT INTO bookings
+                (username, slot, amount, dob, birth_time, birth_place,
+                 contact, transaction_id, message, status)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
@@ -167,8 +161,7 @@ elif choice == "Book Slot":
                     "Pending"
                 ))
                 conn.commit()
-
-                st.success("Booking submitted! Admin will verify and prepare your Kundli.")
+                st.success("Booking submitted! Admin will verify payment.")
                 st.session_state.booking_data = None
 
 # ---------------- MY BOOKINGS ----------------
@@ -176,9 +169,8 @@ elif choice == "My Bookings":
     st.subheader("My Bookings")
 
     cursor.execute("""
-    SELECT slot, amount, status 
-    FROM bookings 
-    WHERE username=?
+    SELECT slot, amount, status
+    FROM bookings WHERE username=?
     """, (st.session_state.user,))
     rows = cursor.fetchall()
 
@@ -190,28 +182,36 @@ elif choice == "My Bookings":
 
 # ---------------- ADMIN PANEL ----------------
 elif choice == "Admin Panel":
-    st.subheader("Admin Booking Approval")
 
-    cursor.execute("""
-    SELECT id, username, slot, amount, dob, birth_time, birth_place,
-           contact, transaction_id, message, status
-    FROM bookings 
-    WHERE status='Pending'
-    """)
-    rows = cursor.fetchall()
+    admin_menu = st.sidebar.radio(
+        "Admin Options",
+        ["View Clients", "View Appointments", "View Payments", "Reschedule Appointment"]
+    )
 
-    if rows:
-        for row in rows:
-            st.write("------------")
+    # VIEW CLIENTS
+    if admin_menu == "View Clients":
+        st.subheader("All Clients")
+        cursor.execute("SELECT id, username FROM users")
+        users = cursor.fetchall()
+        for user in users:
+            if user[1] != "admin":
+                st.write(f"ID: {user[0]} | Username: {user[1]}")
+
+    # VIEW APPOINTMENTS
+    elif admin_menu == "View Appointments":
+        st.subheader("All Appointments")
+        cursor.execute("SELECT * FROM bookings")
+        bookings = cursor.fetchall()
+
+        for row in bookings:
+            st.write("-----------")
+            st.write(f"Booking ID: {row[0]}")
             st.write(f"User: {row[1]}")
             st.write(f"Slot: {row[2]}")
-            st.write(f"Amount: ₹{row[3]}")
             st.write(f"DOB: {row[4]}")
             st.write(f"Birth Time: {row[5]}")
             st.write(f"Birth Place: {row[6]}")
             st.write(f"Contact: {row[7]}")
-            st.write(f"Transaction ID: {row[8]}")
-            st.write(f"Message: {row[9]}")
             st.write(f"Status: {row[10]}")
 
             col1, col2 = st.columns(2)
@@ -221,7 +221,6 @@ elif choice == "Admin Panel":
                     cursor.execute("UPDATE bookings SET status='Approved' WHERE id=?",
                                    (row[0],))
                     conn.commit()
-                    st.success("Approved")
                     st.rerun()
 
             with col2:
@@ -229,10 +228,44 @@ elif choice == "Admin Panel":
                     cursor.execute("UPDATE bookings SET status='Rejected' WHERE id=?",
                                    (row[0],))
                     conn.commit()
-                    st.error("Rejected")
                     st.rerun()
-    else:
-        st.info("No pending bookings.")
+
+    # VIEW PAYMENTS
+    elif admin_menu == "View Payments":
+        st.subheader("Payment Details")
+        cursor.execute("SELECT id, username, amount, transaction_id, status FROM bookings")
+        payments = cursor.fetchall()
+
+        for row in payments:
+            st.write("-----------")
+            st.write(f"Booking ID: {row[0]}")
+            st.write(f"User: {row[1]}")
+            st.write(f"Amount: ₹{row[2]}")
+            st.write(f"Transaction ID: {row[3]}")
+            st.write(f"Status: {row[4]}")
+
+    # RESCHEDULE
+    elif admin_menu == "Reschedule Appointment":
+        st.subheader("Reschedule Approved Appointment")
+
+        cursor.execute("SELECT id, slot FROM bookings WHERE status='Approved'")
+        approved = cursor.fetchall()
+
+        if approved:
+            ids = [str(row[0]) for row in approved]
+            selected_id = st.selectbox("Select Booking ID", ids)
+
+            new_slot = st.selectbox("New Slot",
+                                    ["10 AM", "1 PM", "4 PM", "7 PM"])
+
+            if st.button("Update Slot"):
+                cursor.execute("UPDATE bookings SET slot=? WHERE id=?",
+                               (new_slot, selected_id))
+                conn.commit()
+                st.success("Appointment Rescheduled")
+                st.rerun()
+        else:
+            st.info("No approved bookings available.")
 
 # ---------------- LOGOUT ----------------
 elif choice == "Logout":
