@@ -1,6 +1,11 @@
 import streamlit as st
 import sqlite3
+import hashlib
 from datetime import datetime
+
+# ---------- PASSWORD HASH FUNCTION ----------
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
 
 # ---------- DATABASE ----------
 conn = sqlite3.connect("astro.db", check_same_thread=False)
@@ -9,7 +14,7 @@ cursor = conn.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT,
+    username TEXT UNIQUE,
     password TEXT,
     role TEXT
 )
@@ -19,7 +24,7 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS bookings(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT,
-    slot TEXT,
+    slot TEXT UNIQUE,
     status TEXT,
     payment TEXT,
     created_at TEXT
@@ -28,10 +33,13 @@ CREATE TABLE IF NOT EXISTS bookings(
 
 conn.commit()
 
-# ---------- DEFAULT ADMIN ----------
+# ---------- CREATE DEFAULT ADMIN ----------
+admin_password = hash_password("admin123")
+
 cursor.execute("SELECT * FROM users WHERE username='admin'")
 if not cursor.fetchone():
-    cursor.execute("INSERT INTO users VALUES (NULL,'admin','admin123','admin')")
+    cursor.execute("INSERT INTO users VALUES (NULL,?,?,?)",
+                   ("admin", admin_password, "admin"))
     conn.commit()
 
 # ---------- SESSION ----------
@@ -42,90 +50,113 @@ if "role" not in st.session_state:
 
 # ---------- UI ----------
 st.set_page_config(page_title="Astrology Client System", layout="centered")
-st.title("🔮 Astrology Client Management")
-st.markdown("Developed By: Pranav Naidu | ID: 19029")
+st.title("🔮 Astrology Client Management System")
+st.markdown("Developed by Pranav Naidu")
 
-menu = st.sidebar.selectbox("Menu", ["Login", "Register"])
+# ---------- LOGOUT ----------
+if st.session_state.user:
+    if st.sidebar.button("Logout"):
+        st.session_state.user = None
+        st.session_state.role = None
+        st.rerun()
 
-# ---------- REGISTER ----------
-if menu == "Register":
-    st.subheader("User Registration")
+# ---------- AUTH MENU ----------
+if not st.session_state.user:
+    menu = st.sidebar.selectbox("Menu", ["Login", "Register"])
 
-    u = st.text_input("Username")
-    p = st.text_input("Password", type="password")
+    # REGISTER
+    if menu == "Register":
+        st.subheader("Create User Account")
 
-    if st.button("Create Account"):
-        cursor.execute("INSERT INTO users VALUES (NULL,?,?,?)", (u,p,"user"))
-        conn.commit()
-        st.success("Account created")
+        u = st.text_input("Username")
+        p = st.text_input("Password", type="password")
 
-# ---------- LOGIN ----------
-if menu == "Login":
-    st.subheader("Login")
+        if st.button("Register"):
+            try:
+                cursor.execute("INSERT INTO users VALUES (NULL,?,?,?)",
+                               (u, hash_password(p), "user"))
+                conn.commit()
+                st.success("Account created successfully")
+            except:
+                st.error("Username already exists")
 
-    u = st.text_input("Username")
-    p = st.text_input("Password", type="password")
+    # LOGIN
+    if menu == "Login":
+        st.subheader("Login")
 
-    if st.button("Login"):
-        cursor.execute("SELECT * FROM users WHERE username=? AND password=?", (u,p))
-        user = cursor.fetchone()
+        u = st.text_input("Username")
+        p = st.text_input("Password", type="password")
 
-        if user:
-            st.session_state.user = user[1]
-            st.session_state.role = user[3]
-            st.success("Login successful")
-        else:
-            st.error("Invalid credentials")
+        if st.button("Login"):
+            cursor.execute("SELECT * FROM users WHERE username=? AND password=?",
+                           (u, hash_password(p)))
+            user = cursor.fetchone()
+
+            if user:
+                st.session_state.user = user[1]
+                st.session_state.role = user[3]
+                st.success("Login successful")
+                st.rerun()
+            else:
+                st.error("Invalid credentials")
 
 # ---------- USER DASHBOARD ----------
 if st.session_state.role == "user":
-    st.sidebar.success(f"User: {st.session_state.user}")
+
+    st.sidebar.success(f"Logged in as: {st.session_state.user}")
 
     option = st.sidebar.selectbox("User Panel", [
         "Book Slot",
         "My Bookings"
     ])
 
+    slots = ["10:00 AM", "12:00 PM", "02:00 PM", "04:00 PM"]
+
+    # BOOK SLOT
     if option == "Book Slot":
-        st.subheader("Book Consultation Slot")
+        st.subheader("Available Slots")
 
-        slots = [
-            "10:00 AM",
-            "12:00 PM",
-            "02:00 PM",
-            "04:00 PM"
-        ]
+        for slot in slots:
+            cursor.execute("SELECT * FROM bookings WHERE slot=?", (slot,))
+            booked = cursor.fetchone()
 
-        selected = st.selectbox("Choose Slot", slots)
+            if booked:
+                st.error(f"{slot} - Booked ❌")
+            else:
+                if st.button(f"Book {slot}"):
+                    cursor.execute("""
+                    INSERT INTO bookings VALUES(NULL,?,?,?,?,?)
+                    """, (
+                        st.session_state.user,
+                        slot,
+                        "Pending Approval",
+                        "Paid",
+                        str(datetime.now())
+                    ))
+                    conn.commit()
+                    st.success("Booking request sent")
+                    st.rerun()
 
-        cursor.execute("SELECT * FROM bookings WHERE slot=?", (selected,))
-        if cursor.fetchone():
-            st.error("Slot already booked ❌")
-        else:
-            if st.button("Pay & Book"):
-                cursor.execute("""
-                INSERT INTO bookings VALUES(NULL,?,?,?,?,?)
-                """, (
-                    st.session_state.user,
-                    selected,
-                    "Pending Approval",
-                    "Paid",
-                    str(datetime.now())
-                ))
-                conn.commit()
-                st.success("Booking request sent")
-
+    # MY BOOKINGS
     if option == "My Bookings":
         st.subheader("My Bookings")
 
-        cursor.execute("SELECT * FROM bookings WHERE username=?", (st.session_state.user,))
+        cursor.execute("SELECT * FROM bookings WHERE username=?",
+                       (st.session_state.user,))
         data = cursor.fetchall()
 
+        if not data:
+            st.info("No bookings yet")
+
         for row in data:
-            st.write(f"Slot: {row[2]} | Status: {row[3]} | Payment: {row[4]}")
+            st.write(f"Slot: {row[2]}")
+            st.write(f"Status: {row[3]}")
+            st.write(f"Payment: {row[4]}")
+            st.write("---")
 
 # ---------- ADMIN DASHBOARD ----------
 if st.session_state.role == "admin":
+
     st.sidebar.success("Admin Panel")
 
     option = st.sidebar.selectbox("Admin Controls", [
@@ -134,33 +165,47 @@ if st.session_state.role == "admin":
         "Upcoming Meetings"
     ])
 
+    # APPROVE BOOKINGS
     if option == "Approve Bookings":
         st.subheader("Pending Bookings")
 
         cursor.execute("SELECT * FROM bookings WHERE status='Pending Approval'")
         data = cursor.fetchall()
 
+        if not data:
+            st.info("No pending bookings")
+
         for row in data:
             st.write(f"User: {row[1]} | Slot: {row[2]}")
             if st.button(f"Approve {row[0]}"):
-                cursor.execute("UPDATE bookings SET status='Approved' WHERE id=?", (row[0],))
+                cursor.execute("UPDATE bookings SET status='Approved' WHERE id=?",
+                               (row[0],))
                 conn.commit()
-                st.success("Approved")
+                st.success("Booking Approved")
+                st.rerun()
 
+    # VIEW PAYMENTS
     if option == "View Payments":
         st.subheader("Payments Received")
 
         cursor.execute("SELECT * FROM bookings WHERE payment='Paid'")
         data = cursor.fetchall()
 
-        for row in data:
-            st.write(f"User: {row[1]} | Slot: {row[2]} | Payment: {row[4]}")
+        if not data:
+            st.info("No payments yet")
 
+        for row in data:
+            st.write(f"User: {row[1]} | Slot: {row[2]}")
+
+    # UPCOMING MEETINGS
     if option == "Upcoming Meetings":
         st.subheader("Approved Meetings")
 
         cursor.execute("SELECT * FROM bookings WHERE status='Approved'")
         data = cursor.fetchall()
+
+        if not data:
+            st.info("No approved meetings")
 
         for row in data:
             st.write(f"User: {row[1]} | Slot: {row[2]}")
