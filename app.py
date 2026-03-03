@@ -3,231 +3,238 @@ import sqlite3
 import hashlib
 import qrcode
 from io import BytesIO
-from datetime import datetime
-import os
 
-# ---------------- PAGE CONFIG ----------------
-st.set_page_config(page_title="Divine Astrology Portal", layout="centered")
-st.title("🔮 Divine Astrology Consultation Portal")
+DB_NAME = "astrology.db"
 
-DB_NAME = "astro_portal.db"
-UPI_ID = "rajkumarpalanivel80@okaxis"
-
-# ---------------- HASH FUNCTION ----------------
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
-
-# ---------------- DATABASE CONNECTION ----------------
+# ---------------- DATABASE ----------------
 conn = sqlite3.connect(DB_NAME, check_same_thread=False)
 cursor = conn.cursor()
 
-# ---------------- CREATE TABLES ----------------
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS users(
+CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE,
-    password TEXT,
-    role TEXT,
-    booking_count INTEGER DEFAULT 0
+    password TEXT
 )
 """)
 
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS bookings(
+CREATE TABLE IF NOT EXISTS bookings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT,
-    slot TEXT UNIQUE,
+    slot TEXT,
     amount INTEGER,
-    status TEXT,
-    created_at TEXT
+    dob TEXT,
+    birth_time TEXT,
+    birth_place TEXT,
+    contact TEXT,
+    transaction_id TEXT,
+    message TEXT,
+    status TEXT
 )
 """)
 
 conn.commit()
 
-# ---------------- CREATE ADMIN ----------------
-admin_password = hash_password("admin123")
-cursor.execute("SELECT * FROM users WHERE username=?", ("admin",))
-if not cursor.fetchone():
-    cursor.execute(
-        "INSERT INTO users (username, password, role, booking_count) VALUES (?, ?, ?, ?)",
-        ("admin", admin_password, "admin", 0)
-    )
-    conn.commit()
+# ---------------- FUNCTIONS ----------------
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
 
-# ---------------- SESSION STATE ----------------
+def generate_qr(data):
+    qr = qrcode.make(data)
+    buffer = BytesIO()
+    qr.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
+
+# ---------------- SESSION ----------------
 if "user" not in st.session_state:
     st.session_state.user = None
-if "role" not in st.session_state:
-    st.session_state.role = None
-if "pending_slot" not in st.session_state:
-    st.session_state.pending_slot = None
 
-# ======================================================
-# ================= AUTH SECTION =======================
-# ======================================================
+if "booking_data" not in st.session_state:
+    st.session_state.booking_data = None
 
-if not st.session_state.user:
+st.title("🔮 Astrology Kundli Booking System")
 
-    choice = st.radio("Select Option", ["Login", "Register"])
+menu = ["Login", "Create Account"]
 
-    # -------- REGISTER --------
-    if choice == "Register":
-        st.subheader("Create Account")
+if st.session_state.user == "admin":
+    menu = ["Admin Panel", "Logout"]
 
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
+elif st.session_state.user:
+    menu = ["Book Slot", "My Bookings", "Logout"]
 
-        if st.button("Register"):
-            if username.strip() == "" or password.strip() == "":
-                st.error("All fields required")
-            else:
-                cursor.execute("SELECT * FROM users WHERE username=?", (username,))
-                if cursor.fetchone():
-                    st.error("Username already exists")
-                else:
-                    cursor.execute(
-                        "INSERT INTO users (username, password, role, booking_count) VALUES (?, ?, ?, ?)",
-                        (username, hash_password(password), "user", 0)
-                    )
-                    conn.commit()
-                    st.success("Account Created Successfully ✅")
+choice = st.sidebar.selectbox("Menu", menu)
 
-    # -------- LOGIN --------
-    if choice == "Login":
-        st.subheader("Login")
+# ---------------- CREATE ACCOUNT ----------------
+if choice == "Create Account":
+    st.subheader("Create Account")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
 
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-
-        if st.button("Login"):
-            cursor.execute(
-                "SELECT * FROM users WHERE username=? AND password=?",
-                (username, hash_password(password))
-            )
-            user = cursor.fetchone()
-
-            if user:
-                st.session_state.user = user[1]
-                st.session_state.role = user[3]
-                st.rerun()
-            else:
-                st.error("Invalid Credentials ❌")
-
-# ======================================================
-# ================= USER DASHBOARD =====================
-# ======================================================
-
-if st.session_state.role == "user":
-
-    st.success(f"Welcome {st.session_state.user} 👋")
-
-    if st.button("Logout"):
-        st.session_state.user = None
-        st.session_state.role = None
-        st.session_state.pending_slot = None
-        st.rerun()
-
-    slots = ["10:00 AM", "12:00 PM", "02:00 PM", "04:00 PM"]
-
-    cursor.execute(
-        "SELECT booking_count FROM users WHERE username=?",
-        (st.session_state.user,)
-    )
-    count = cursor.fetchone()[0]
-
-    amount = 501 if count == 0 else 301
-    st.write(f"Consultation Fee: ₹{amount}")
-
-    selected_slot = st.selectbox("Choose Slot", slots)
-
-    if st.button("Generate Payment QR"):
-        cursor.execute("SELECT * FROM bookings WHERE slot=?", (selected_slot,))
-        if cursor.fetchone():
-            st.error("Slot already booked ❌")
-        else:
-            st.session_state.pending_slot = selected_slot
-
-    # -------- SHOW QR --------
-    if st.session_state.pending_slot:
-
-        upi_link = f"upi://pay?pa={UPI_ID}&pn=Astrology&am={amount}&cu=INR"
-
-        qr = qrcode.make(upi_link)
-        buffer = BytesIO()
-        qr.save(buffer)
-        buffer.seek(0)
-
-        st.image(buffer, caption="Scan & Pay Using Any UPI App")
-        st.info("After payment click below button")
-
-        if st.button("I Have Paid"):
-
-            cursor.execute(
-                "INSERT INTO bookings (username, slot, amount, status, created_at) VALUES (?, ?, ?, ?, ?)",
-                (st.session_state.user, st.session_state.pending_slot, amount, "Pending", str(datetime.now()))
-            )
-
-            cursor.execute(
-                "UPDATE users SET booking_count = booking_count + 1 WHERE username=?",
-                (st.session_state.user,)
-            )
-
+    if st.button("Register"):
+        try:
+            cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)",
+                           (username, hash_password(password)))
             conn.commit()
+            st.success("Account created successfully! Please login.")
+        except:
+            st.error("Username already exists!")
 
-            st.success("Payment Submitted! Waiting for Admin Approval.")
-            st.session_state.pending_slot = None
-            st.rerun()
+# ---------------- LOGIN ----------------
+elif choice == "Login":
+    st.subheader("Login")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
 
-    # -------- MY BOOKINGS --------
+    if st.button("Login"):
+        if username == "admin" and password == "admin123":
+            st.session_state.user = "admin"
+            st.success("Admin Logged In")
+        else:
+            cursor.execute("SELECT * FROM users WHERE username=? AND password=?",
+                           (username, hash_password(password)))
+            user = cursor.fetchone()
+            if user:
+                st.session_state.user = username
+                st.success("Login Successful")
+            else:
+                st.error("Invalid Credentials")
+
+# ---------------- BOOK SLOT ----------------
+elif choice == "Book Slot":
+    st.subheader("Book Your Kundli Session")
+
+    slot = st.selectbox("Select Slot", ["10 AM", "1 PM", "4 PM", "7 PM"])
+    amount = 500
+    st.write("Amount to Pay: ₹500")
+
+    # Birth details
+    st.subheader("Birth Details (Required for Kundli)")
+    dob = st.date_input("Date of Birth")
+    birth_time = st.time_input("Accurate Time of Birth")
+    birth_place = st.text_input("Place of Birth")
+
+    if st.button("Generate QR to Pay"):
+        if birth_place.strip() == "":
+            st.error("Please enter place of birth.")
+        else:
+            upi_id = "rajkumarpalanivel80@okaxis"
+            payment_link = f"upi://pay?pa={upi_id}&pn=Astrology&am={amount}&cu=INR"
+
+            qr_image = generate_qr(payment_link)
+            st.image(qr_image)
+
+            st.session_state.booking_data = {
+                "username": st.session_state.user,
+                "slot": slot,
+                "amount": amount,
+                "dob": str(dob),
+                "birth_time": str(birth_time),
+                "birth_place": birth_place
+            }
+
+    if st.session_state.booking_data:
+        st.subheader("After Payment Details")
+
+        contact = st.text_input("Enter Your Contact Number")
+        transaction_id = st.text_input("Enter UPI Transaction ID")
+        message = st.text_area("Message for Astrologer (Optional)")
+
+        if st.button("Submit Booking"):
+            if contact.strip() == "":
+                st.error("Contact number is required!")
+            elif transaction_id.strip() == "":
+                st.error("Transaction ID is required!")
+            else:
+                cursor.execute("""
+                INSERT INTO bookings (
+                    username, slot, amount, dob, birth_time, birth_place,
+                    contact, transaction_id, message, status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    st.session_state.booking_data["username"],
+                    st.session_state.booking_data["slot"],
+                    st.session_state.booking_data["amount"],
+                    st.session_state.booking_data["dob"],
+                    st.session_state.booking_data["birth_time"],
+                    st.session_state.booking_data["birth_place"],
+                    contact,
+                    transaction_id,
+                    message,
+                    "Pending"
+                ))
+                conn.commit()
+
+                st.success("Booking submitted! Admin will verify and prepare your Kundli.")
+                st.session_state.booking_data = None
+
+# ---------------- MY BOOKINGS ----------------
+elif choice == "My Bookings":
     st.subheader("My Bookings")
 
-    cursor.execute(
-        "SELECT slot, amount, status FROM bookings WHERE username=?",
-        (st.session_state.user,)
-    )
+    cursor.execute("""
+    SELECT slot, amount, status 
+    FROM bookings 
+    WHERE username=?
+    """, (st.session_state.user,))
+    rows = cursor.fetchall()
 
-    bookings = cursor.fetchall()
-
-    if bookings:
-        for row in bookings:
-            st.write(f"{row[0]} | ₹{row[1]} | {row[2]}")
+    if rows:
+        for row in rows:
+            st.write(f"Slot: {row[0]} | ₹{row[1]} | Status: {row[2]}")
     else:
         st.info("No bookings yet.")
 
-# ======================================================
-# ================= ADMIN DASHBOARD ====================
-# ======================================================
+# ---------------- ADMIN PANEL ----------------
+elif choice == "Admin Panel":
+    st.subheader("Admin Booking Approval")
 
-if st.session_state.role == "admin":
+    cursor.execute("""
+    SELECT id, username, slot, amount, dob, birth_time, birth_place,
+           contact, transaction_id, message, status
+    FROM bookings 
+    WHERE status='Pending'
+    """)
+    rows = cursor.fetchall()
 
-    st.success("Admin Dashboard 👑")
+    if rows:
+        for row in rows:
+            st.write("------------")
+            st.write(f"User: {row[1]}")
+            st.write(f"Slot: {row[2]}")
+            st.write(f"Amount: ₹{row[3]}")
+            st.write(f"DOB: {row[4]}")
+            st.write(f"Birth Time: {row[5]}")
+            st.write(f"Birth Place: {row[6]}")
+            st.write(f"Contact: {row[7]}")
+            st.write(f"Transaction ID: {row[8]}")
+            st.write(f"Message: {row[9]}")
+            st.write(f"Status: {row[10]}")
 
-    if st.button("Logout"):
-        st.session_state.user = None
-        st.session_state.role = None
-        st.rerun()
+            col1, col2 = st.columns(2)
 
-    st.subheader("Pending Bookings")
+            with col1:
+                if st.button(f"Approve {row[0]}"):
+                    cursor.execute("UPDATE bookings SET status='Approved' WHERE id=?",
+                                   (row[0],))
+                    conn.commit()
+                    st.success("Approved")
+                    st.rerun()
 
-    cursor.execute("SELECT id, username, slot, amount FROM bookings WHERE status='Pending'")
-    pending = cursor.fetchall()
-
-    if pending:
-        for row in pending:
-            st.write(f"{row[1]} | {row[2]} | ₹{row[3]}")
-            if st.button("Approve " + str(row[0])):
-                cursor.execute(
-                    "UPDATE bookings SET status='Approved' WHERE id=?",
-                    (row[0],)
-                )
-                conn.commit()
-                st.rerun()
+            with col2:
+                if st.button(f"Reject {row[0]}"):
+                    cursor.execute("UPDATE bookings SET status='Rejected' WHERE id=?",
+                                   (row[0],))
+                    conn.commit()
+                    st.error("Rejected")
+                    st.rerun()
     else:
         st.info("No pending bookings.")
 
-    st.subheader("Total Revenue")
-
-    cursor.execute("SELECT amount FROM bookings WHERE status='Approved'")
-    total = sum([r[0] for r in cursor.fetchall()])
-    st.write(f"₹{total}")
+# ---------------- LOGOUT ----------------
+elif choice == "Logout":
+    st.session_state.user = None
+    st.success("Logged out successfully.")
