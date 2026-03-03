@@ -1,13 +1,15 @@
 import streamlit as st
 import sqlite3
 import hashlib
+import qrcode
 from datetime import datetime
+from io import BytesIO
 
-# ---------- PASSWORD HASH FUNCTION ----------
+# ---------------- PASSWORD HASH ----------------
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-# ---------- DATABASE ----------
+# ---------------- DATABASE ----------------
 conn = sqlite3.connect("astro.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -16,7 +18,8 @@ CREATE TABLE IF NOT EXISTS users(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE,
     password TEXT,
-    role TEXT
+    role TEXT,
+    booking_count INTEGER DEFAULT 0
 )
 """)
 
@@ -25,16 +28,244 @@ CREATE TABLE IF NOT EXISTS bookings(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT,
     slot TEXT UNIQUE,
+    amount INTEGER,
     status TEXT,
-    payment TEXT,
     created_at TEXT
 )
 """)
 
 conn.commit()
 
-# ---------- CREATE DEFAULT ADMIN ----------
+# ---------------- CREATE ADMIN ----------------
 admin_password = hash_password("admin123")
+
+cursor.execute("SELECT * FROM users WHERE username='admin'")
+if not cursor.fetchone():
+    cursor.execute("INSERT INTO users VALUES (NULL,?,?,?,?)",
+                   ("admin", admin_password, "admin", 0))
+    conn.commit()
+
+# ---------------- SESSION ----------------
+if "user" not in st.session_state:
+    st.session_state.user = None
+if "role" not in st.session_state:
+    st.session_state.role = None
+
+# ---------------- SPIRITUAL UI ----------------
+st.set_page_config(page_title="Divine Astrology Portal", layout="centered")
+
+st.markdown("""
+<style>
+body {
+    background-color: #0e0e0e;
+}
+h1, h2, h3 {
+    color: #d4af37;
+}
+.stButton>button {
+    background-color: #d4af37;
+    color: black;
+    border-radius: 8px;
+}
+.stSidebar {
+    background-color: #1a1a1a;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.title("🔱 Divine Astrology Consultation Portal 🔱")
+st.markdown("### Blessings & Guidance Awaits You ✨")
+
+UPI_ID = "rajkumarpalanivel80@okaxis"
+
+# ---------------- LOGOUT ----------------
+if st.session_state.user:
+    if st.sidebar.button("Logout"):
+        st.session_state.user = None
+        st.session_state.role = None
+        st.rerun()
+
+# ---------------- AUTH ----------------
+if not st.session_state.user:
+
+    menu = st.sidebar.selectbox("Menu", ["Login", "Register"])
+
+    # REGISTER
+    if menu == "Register":
+        st.subheader("Create Devotee Account")
+
+        u = st.text_input("Username")
+        p = st.text_input("Password", type="password")
+
+        if st.button("Register"):
+            try:
+                cursor.execute("INSERT INTO users VALUES (NULL,?,?,?,?)",
+                               (u, hash_password(p), "user", 0))
+                conn.commit()
+                st.success("Account created successfully 🙏")
+            except:
+                st.error("Username already exists")
+
+    # LOGIN
+    if menu == "Login":
+        st.subheader("Login")
+
+        u = st.text_input("Username")
+        p = st.text_input("Password", type="password")
+
+        if st.button("Login"):
+            cursor.execute("SELECT * FROM users WHERE username=? AND password=?",
+                           (u, hash_password(p)))
+            user = cursor.fetchone()
+
+            if user:
+                st.session_state.user = user[1]
+                st.session_state.role = user[3]
+                st.success("Welcome 🙏")
+                st.rerun()
+            else:
+                st.error("Invalid credentials")
+
+# ---------------- USER DASHBOARD ----------------
+if st.session_state.role == "user":
+
+    st.sidebar.success(f"Welcome {st.session_state.user}")
+
+    option = st.sidebar.selectbox("Devotee Panel", [
+        "Book Slot",
+        "My Bookings"
+    ])
+
+    slots = ["10:00 AM", "12:00 PM", "02:00 PM", "04:00 PM"]
+
+    # BOOK SLOT
+    if option == "Book Slot":
+
+        st.subheader("Available Divine Slots")
+
+        cursor.execute("SELECT booking_count FROM users WHERE username=?",
+                       (st.session_state.user,))
+        booking_count = cursor.fetchone()[0]
+
+        amount = 501 if booking_count == 0 else 301
+
+        st.info(f"Consultation Fee: ₹{amount}")
+
+        for slot in slots:
+            cursor.execute("SELECT * FROM bookings WHERE slot=?", (slot,))
+            booked = cursor.fetchone()
+
+            if booked:
+                st.error(f"{slot} - Booked ❌")
+            else:
+                if st.button(f"Book {slot}"):
+
+                    upi_link = f"upi://pay?pa={UPI_ID}&pn=AstrologyConsultation&am={amount}&cu=INR"
+
+                    qr = qrcode.make(upi_link)
+                    buf = BytesIO()
+                    qr.save(buf)
+                    buf.seek(0)
+
+                    st.image(buf, caption=f"Scan to Pay ₹{amount}")
+
+                    if st.button("Confirm Payment"):
+                        cursor.execute("""
+                        INSERT INTO bookings VALUES(NULL,?,?,?,?,?)
+                        """, (
+                            st.session_state.user,
+                            slot,
+                            amount,
+                            "Pending Approval",
+                            str(datetime.now())
+                        ))
+
+                        cursor.execute("""
+                        UPDATE users SET booking_count = booking_count + 1
+                        WHERE username=?
+                        """, (st.session_state.user,))
+
+                        conn.commit()
+
+                        st.success("Booking Request Sent 🙏 Await Approval")
+                        st.rerun()
+
+    # MY BOOKINGS
+    if option == "My Bookings":
+
+        st.subheader("Your Consultations")
+
+        cursor.execute("SELECT * FROM bookings WHERE username=?",
+                       (st.session_state.user,))
+        data = cursor.fetchall()
+
+        if not data:
+            st.info("No bookings yet")
+
+        for row in data:
+            st.write(f"🕒 Slot: {row[2]}")
+            st.write(f"💰 Amount: ₹{row[3]}")
+            st.write(f"📌 Status: {row[4]}")
+            st.write("---")
+
+# ---------------- ADMIN DASHBOARD ----------------
+if st.session_state.role == "admin":
+
+    st.sidebar.success("Admin Panel 🔱")
+
+    option = st.sidebar.selectbox("Admin Controls", [
+        "Approve Bookings",
+        "View Payments",
+        "Upcoming Meetings"
+    ])
+
+    # APPROVE BOOKINGS
+    if option == "Approve Bookings":
+
+        st.subheader("Pending Approval")
+
+        cursor.execute("SELECT * FROM bookings WHERE status='Pending Approval'")
+        data = cursor.fetchall()
+
+        if not data:
+            st.info("No pending bookings")
+
+        for row in data:
+            st.write(f"User: {row[1]} | Slot: {row[2]} | ₹{row[3]}")
+            if st.button(f"Approve {row[0]}"):
+                cursor.execute("UPDATE bookings SET status='Approved' WHERE id=?",
+                               (row[0],))
+                conn.commit()
+                st.success("Approved ✅")
+                st.rerun()
+
+    # VIEW PAYMENTS
+    if option == "View Payments":
+
+        st.subheader("Payments Received")
+
+        cursor.execute("SELECT * FROM bookings")
+        data = cursor.fetchall()
+
+        total = sum([row[3] for row in data])
+        st.success(f"Total Revenue: ₹{total}")
+
+        for row in data:
+            st.write(f"{row[1]} | {row[2]} | ₹{row[3]}")
+
+    # UPCOMING MEETINGS
+    if option == "Upcoming Meetings":
+
+        st.subheader("Approved Consultations")
+
+        cursor.execute("SELECT * FROM bookings WHERE status='Approved'")
+        data = cursor.fetchall()
+
+        if not data:
+            st.info("No approved meetings")
+
+        for row in data:
+            st.write(f"{row[1]} - {row[2]} - ₹{row[3]}")admin_password = hash_password("admin123")
 
 cursor.execute("SELECT * FROM users WHERE username='admin'")
 if not cursor.fetchone():
@@ -209,3 +440,4 @@ if st.session_state.role == "admin":
 
         for row in data:
             st.write(f"User: {row[1]} | Slot: {row[2]}")
+
